@@ -38,27 +38,38 @@ const handleEvent = async (event) => {
   const userMessage = event.message.text;
   const timestamp = new Date(event.timestamp).toISOString();
 
-  try {
-    // 處理消息，例如通過大型語言模型整理
-    const processedMessage = await processWithLLM(userMessage);
+  // 僅在收到 "整理" 兩字時觸發 OpenAI 整理
+  if (userMessage === '整理') {
+    try {
+      // 處理消息，通過大型語言模型 (GPT-4) 整理
+      const processedMessage = await processWithLLM(userMessage);
 
-    // 將整理後的消息寫入 Google Sheets
-    await writeToGoogleSheets({ timestamp, message: processedMessage });
-  } catch (error) {
-    console.error('Error processing event:', error);
+      // 將整理後的消息寫入 Google Sheets
+      await writeToGoogleSheets({ timestamp, message: processedMessage });
+
+      // 回應用戶，告知已完成整理
+      return { type: 'text', text: '已完成資料整理並保存至 Google Sheets。' };
+    } catch (error) {
+      console.error('Error processing event:', error);
+      return { type: 'text', text: '資料整理過程中發生錯誤，請稍後再試。' };
+    }
+  } else {
+    // 非整理指令的回應
+    return { type: 'text', text: '請輸入「整理」以啟動資料整理程序。' };
   }
-
-  return Promise.resolve(null);
 };
 
-// 使用 OpenAI API 處理消息
+// 使用 OpenAI API 處理消息，改用 GPT-4 模型
 const processWithLLM = async (message) => {
   const apiKey = process.env.OPENAI_API_KEY;
 
   try {
-    const response = await axios.post('https://api.openai.com/v1/completions', {
-      model: 'text-davinci-003',
-      prompt: `整理以下對話內容：\n\n${message}`,
+    const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: '你是專業的資料整理助手，負責簡化和摘要用戶提供的資料。' },
+        { role: 'user', content: `整理以下對話內容：\n\n${message}` },
+      ],
       max_tokens: 150,
     }, {
       headers: {
@@ -67,7 +78,7 @@ const processWithLLM = async (message) => {
       },
     });
 
-    return response.data.choices[0].text.trim();
+    return response.data.choices[0].message.content.trim();
   } catch (error) {
     console.error('Error with OpenAI API:', error);
     throw error;
