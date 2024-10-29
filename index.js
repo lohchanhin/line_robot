@@ -1,8 +1,13 @@
 // 引入必要的套件
+const { google } = require('googleapis');
 const line = require('@line/bot-sdk');
 const express = require('express');
 const axios = require('axios');
-require('dotenv').config(); // 載入 .env 文件的環境變量
+const dotenv = require('dotenv');
+const path = require('path');
+const fs = require('fs');
+
+dotenv.config(); // 載入 .env 文件的環境變量
 
 // 配置 Line Messaging API
 const config = {
@@ -71,23 +76,38 @@ const processWithLLM = async (message) => {
 
 // 將數據寫入 Google Sheets
 const writeToGoogleSheets = async (data) => {
+  const sheets = google.sheets({ version: 'v4', auth: getAuth() });
   const sheetId = process.env.GOOGLE_SHEET_ID;
-  const sheetName = 'Sheet1';
-  const range = `${sheetName}!A:B`;
-
-  const googleApiKey = process.env.GOOGLE_API_KEY;
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}:append?valueInputOption=RAW&key=${googleApiKey}`;
+  const range = 'Sheet1!A:B';
 
   const values = [
     [data.timestamp, data.message],
   ];
 
   try {
-    await axios.post(url, { values });
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: sheetId,
+      range: range,
+      valueInputOption: 'RAW',
+      resource: { values },
+    });
   } catch (error) {
     console.error('Error writing to Google Sheets:', error);
     throw error;
   }
+};
+
+// 獲取授權
+const getAuth = () => {
+  const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  const tempPath = path.join(__dirname, 'service-account-temp.json');
+  fs.writeFileSync(tempPath, JSON.stringify(serviceAccount));
+
+  const auth = new google.auth.GoogleAuth({
+    keyFile: tempPath,
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+  });
+  return auth;
 };
 
 // 啟動伺服器
