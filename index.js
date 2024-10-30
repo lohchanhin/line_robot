@@ -18,6 +18,10 @@ const config = {
 // 初始化 Express 應用
 const app = express();
 
+// 暫存當天的對話內容
+let conversationLog = [];
+let currentDate = new Date().toISOString().split('T')[0]; // 當天日期（格式為 YYYY-MM-DD）
+
 // 設置 webhook 路由
 app.post('/webhook', line.middleware(config), (req, res) => {
     Promise
@@ -37,25 +41,38 @@ const handleEvent = async (event) => {
 
     const userMessage = event.message.text;
     const timestamp = new Date(event.timestamp).toISOString();
+    const messageDate = timestamp.split('T')[0]; // 取得消息的日期（格式為 YYYY-MM-DD）
 
-    // 僅在收到 "整理" 兩字時觸發 OpenAI 整理
+    // 如果是新的一天，重置 conversationLog
+    if (messageDate !== currentDate) {
+        conversationLog = [];
+        currentDate = messageDate;
+    }
+
+    // 如果消息內容為「整理」，則觸發整理流程
     if (userMessage === '整理') {
         try {
-            // 處理消息，通過大型語言模型 (GPT-4) 整理
-            const processedMessage = await processWithLLM(userMessage);
+            if (conversationLog.length === 0) {
+                return { type: 'text', text: '今天沒有可整理的對話內容。' };
+            }
 
-            // 將整理後的消息寫入 Google Sheets
-            await writeToGoogleSheets({ timestamp, message: processedMessage });
+            // 整理當天的所有對話內容
+            const allMessages = conversationLog.join('\n');
+            const processedMessage = await processWithLLM(allMessages);
+
+            // 將整理後的消息寫入 Google Docs
+            await writeToGoogleDocs({ timestamp, message: processedMessage });
 
             // 回應用戶，告知已完成整理
-            return { type: 'text', text: '已完成資料整理並保存至 Google Sheets。' };
+            return { type: 'text', text: '已完成當天資料整理並保存至 Google Docs。' };
         } catch (error) {
             console.error('Error processing event:', error);
             return { type: 'text', text: '資料整理過程中發生錯誤，請稍後再試。' };
         }
     } else {
-        // 非整理指令的回應
-        return { type: 'text', text: '請輸入「整理」以啟動資料整理程序。' };
+        // 保存非「整理」指令的對話內容
+        conversationLog.push(`[${timestamp}] ${userMessage}`);
+        return Promise.resolve(null); // 不回應其他消息
     }
 };
 
@@ -85,26 +102,29 @@ const processWithLLM = async (message) => {
     }
 };
 
+// 將數據寫入 Google Docs
+const writeToGoogleDocs = async (data) => {
+    const docs = google.docs({ version: 'v1', auth: getAuth() });
+    const docId = process.env.GOOGLE_DOC_ID;
 
-// 將數據寫入 Google Sheets
-const writeToGoogleSheets = async (data) => {
-    const sheets = google.sheets({ version: 'v4', auth: getAuth() });
-    const sheetId = process.env.GOOGLE_SHEET_ID;
-    const range = 'Sheet1!A:B';
-
-    const values = [
-        [data.timestamp, data.message],
-    ];
+    const content = `日期: ${data.timestamp.split('T')[0]}\n\n${data.message}`;
 
     try {
-        await sheets.spreadsheets.values.append({
-            spreadsheetId: sheetId,
-            range: range,
-            valueInputOption: 'RAW',
-            resource: { values },
+        await docs.documents.batchUpdate({
+            documentId: docId,
+            requestBody: {
+                requests: [
+                    {
+                        insertText: {
+                            location: { index: 1 },
+                            text: content,
+                        },
+                    },
+                ],
+            },
         });
     } catch (error) {
-        console.error('Error writing to Google Sheets:', error);
+        console.error('Error writing to Google Docs:', error);
         throw error;
     }
 };
@@ -112,12 +132,10 @@ const writeToGoogleSheets = async (data) => {
 // 獲取授權
 const getAuth = () => {
     const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-    const tempPath = path.join(__dirname, 'service-account-temp.json');
-    fs.writeFileSync(tempPath, JSON.stringify(serviceAccount));
 
     const auth = new google.auth.GoogleAuth({
-        keyFile: tempPath,
-        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+        credentials: serviceAccount,
+        scopes: ['https://www.googleapis.com/auth/documents'],
     });
     return auth;
 };
