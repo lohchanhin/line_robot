@@ -24,18 +24,22 @@ let currentDate = new Date().toISOString().split('T')[0]; // 當天日期（格�
 
 // 設置 webhook 路由
 app.post('/webhook', line.middleware(config), (req, res) => {
+    console.log('Received new event(s) from LINE webhook');
     Promise
         .all(req.body.events.map(handleEvent))
         .then((result) => res.json(result))
         .catch((err) => {
-            console.error(err);
+            console.error('Error handling events:', err);
             res.status(500).end();
         });
 });
 
 // 處理每個事件的函數
 const handleEvent = async (event) => {
+    console.log('Handling new event:', event);
+
     if (event.type !== 'message' || event.message.type !== 'text') {
+        console.log('Non-text or non-message event received, ignoring.');
         return Promise.resolve(null);
     }
 
@@ -43,8 +47,11 @@ const handleEvent = async (event) => {
     const timestamp = new Date(event.timestamp).toISOString();
     const messageDate = timestamp.split('T')[0]; // 取得消息的日期（格式為 YYYY-MM-DD）
 
+    console.log(`Message received: "${userMessage}" at ${timestamp}`);
+
     // 如果是新的一天，重置 conversationLog
     if (messageDate !== currentDate) {
+        console.log('New day detected, resetting conversation log.');
         conversationLog = [];
         currentDate = messageDate;
     }
@@ -53,17 +60,21 @@ const handleEvent = async (event) => {
     if (userMessage === '整理') {
         try {
             if (conversationLog.length === 0) {
+                console.log('No messages to process for today.');
                 return { type: 'text', text: '今天沒有可整理的對話內容。' };
             }
 
             // 整理當天的所有對話內容
             const allMessages = conversationLog.join('\n');
+            console.log('All messages for today:', allMessages);
+
             const processedMessage = await processWithLLM(allMessages);
+            console.log('Processed message from OpenAI:', processedMessage);
 
             // 將整理後的消息寫入 Google Docs
             await writeToGoogleDocs({ timestamp, message: processedMessage });
 
-            // 回應用戶，告知已完成整理
+            console.log('Successfully saved processed message to Google Docs');
             return { type: 'text', text: '已完成當天資料整理並保存至 Google Docs。' };
         } catch (error) {
             console.error('Error processing event:', error);
@@ -71,6 +82,7 @@ const handleEvent = async (event) => {
         }
     } else {
         // 保存非「整理」指令的對話內容
+        console.log(`Logging message: [${timestamp}] ${userMessage}`);
         conversationLog.push(`[${timestamp}] ${userMessage}`);
         return Promise.resolve(null); // 不回應其他消息
     }
@@ -81,6 +93,7 @@ const processWithLLM = async (message) => {
     const apiKey = process.env.OPENAI_API_KEY;
 
     try {
+        console.log('Sending message to OpenAI for processing.');
         const response = await axios.post('https://api.openai.com/v1/chat/completions', {
             model: 'gpt-4',
             messages: [
@@ -95,7 +108,9 @@ const processWithLLM = async (message) => {
             },
         });
 
-        return response.data.choices[0].message.content.trim();
+        const processedMessage = response.data.choices[0].message.content.trim();
+        console.log('Received response from OpenAI:', processedMessage);
+        return processedMessage;
     } catch (error) {
         console.error('Error with OpenAI API:', error);
         throw error;
@@ -110,6 +125,7 @@ const writeToGoogleDocs = async (data) => {
     const content = `日期: ${data.timestamp.split('T')[0]}\n\n${data.message}`;
 
     try {
+        console.log('Writing processed message to Google Docs.');
         await docs.documents.batchUpdate({
             documentId: docId,
             requestBody: {
@@ -123,6 +139,7 @@ const writeToGoogleDocs = async (data) => {
                 ],
             },
         });
+        console.log('Successfully written to Google Docs.');
     } catch (error) {
         console.error('Error writing to Google Docs:', error);
         throw error;
